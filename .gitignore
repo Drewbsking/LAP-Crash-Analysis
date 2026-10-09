@@ -1,0 +1,10 @@
+/.env
+/vendor/
+/node_modules/
+/storage/*
+!/storage/.gitkeep
+/test-results/
+/.phpunit.cache/
+/dist/
+*.zip
+Thumbs.db
