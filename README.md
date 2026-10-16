@@ -4,7 +4,7 @@ Staff portal for the Road Commission for Oakland County. Each RCOC project has o
 
 ## Local preview
 
-Requirements: PHP 8.3+ with PDO, `pdo_sqlite` for local trials, `pdo_mysql` for hosting, `mbstring`, OpenSSL, Argon2id password support, and Composer. Production uses MySQL/MariaDB and SMTP. No Node build or frontend service is required.
+Requirements: PHP 8.2+ with PDO, `pdo_sqlite` for local trials, `pdo_mysql` for hosting, `mbstring`, OpenSSL, Argon2id password support, and Composer. Production uses MySQL/MariaDB and SMTP. No Node build or frontend service is required.
 
 The current workspace has an ignored `.env` and a fictional demo database. Start the preview from the repository root:
 
@@ -58,7 +58,7 @@ An upload-ready archive can be built in PowerShell with `.\bin\package.ps1`. It 
 
 Use a **separate, empty database** and a dedicated HTTPS hostname or subdirectory on your existing PHP host. A hosting administrator must provide the actual database connection, SMTP credentials, site URL, and stakeholder addresses. No live host or email account is configured in this repository.
 
-1. Select PHP 8.3 or later. Verify `PDO`, `pdo_mysql`, `mbstring`, OpenSSL, and `argon2id` in `password_algos()`; enable Composer or build dependencies locally for upload.
+1. Use PHP 8.2 or later for both the website and command line. A host already running PHP 8.2 does not need a global version change for this portal. Verify `PDO`, `pdo_mysql`, `mbstring`, OpenSSL, and `argon2id` in `password_algos()`; enable Composer or build dependencies locally for upload.
 2. Upload application source plus `vendor/`, or run `composer install --no-dev --prefer-dist --optimize-autoloader` on the host. Include `composer.lock`. **Do not upload the local `.env`, demo database, tests, or test-results.**
 3. Point the document root to **`public/`**. Keep `app/`, `bin/`, `database/`, `.env`, `vendor/`, and `storage/` outside the web root. Only the PHP service account should have access to private configuration; give it write access to `storage/` and its private PHP session directory.
 4. Copy `.env.example` to `.env` on the host and configure `APP_ENV=production`, the HTTPS `APP_URL`, a dedicated MySQL/MariaDB account and database, and SMTP settings. Process environment variables override `.env`. Keep PHP error display disabled. If HTTPS terminates at a proxy, production session cookies remain Secure; configure the host/proxy to enforce HTTPS.
@@ -70,6 +70,8 @@ Use a **separate, empty database** and a dedicated HTTPS hostname or subdirector
 10. Verify HTTPS, unauthenticated redirects, first-login changes, all role permissions, a complete test workflow, and protected project links on the actual host. Confirm backups and perform a restore test before entering operational data.
 
 SMTP supports authenticated TLS (`SMTP_ENCRYPTION=tls`, normally port 587) or implicit TLS (`ssl`, normally port 465). Password reset emails use `APP_URL`; verify that it is correct before launch. For a host subdirectory, include it in `APP_URL` and map that URL to `public/`.
+
+Composer resolves dependencies against PHP 8.2, including when packages are built on a newer development machine. After pulling updates on the host, run `composer install --no-dev --prefer-dist --optimize-autoloader` and `composer check-platform-reqs --no-dev` with the host's PHP interpreter. Do not bypass Composer's platform checks. Keep the host's PHP patch release current; [upstream PHP 8.2 security support ends December 31, 2026](https://www.php.net/supported-versions.php).
 
 The notification queue atomically saves each milestone and its recipients. A worker claims a message before sending it, so parallel requests cannot normally send it twice. If a process stops after SMTP accepts a message but before the sent status is saved, delivery is uncertain; after ten minutes the administrator may explicitly retry. The interface warns that such a retry can duplicate the email. Sent messages are never automatically retried. Recipient addresses are snapshots from the event; updating stakeholder settings affects future events.
 

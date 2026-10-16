@@ -14,7 +14,21 @@ The portal was implemented and verified locally. No production deployment or act
 
 Backend scenarios include mandatory password changes, reset token hashing/expiry/single use, revoked sessions, disabled accounts, role enforcement, conditional required fields, unique identifiers preserving leading zeros, duplicate submission replay, stale edits, exact folder paths, milestone order, closed-record locking, before/after history, overdue boundaries, recipient deduplication, SMTP failure, safe retry, atomic rollback, and concurrent submissions/transitions.
 
-The MariaDB ZIP runtime came from the [official MariaDB archive](https://archive.mariadb.org/mariadb-11.4.8/winx64-packages/) and its SHA-256 matched the published checksum. It ran as a temporary localhost-only process, not a Windows service. Existing databases were not modified. PHP execution used 8.5.0; the application's minimum is PHP 8.3. This does not constitute testing every supported PHP/MySQL version.
+The MariaDB ZIP runtime came from the [official MariaDB archive](https://archive.mariadb.org/mariadb-11.4.8/winx64-packages/) and its SHA-256 matched the published checksum. It ran as a temporary localhost-only process, not a Windows service. Existing databases were not modified. Initial PHP execution used 8.5.0. This does not constitute testing every supported PHP/MySQL version.
+
+## PHP 8.2 compatibility
+
+The hosting account uses PHP 8.2 globally. The portal does not require PHP 8.3 language features or dependencies, so its Composer minimum was changed to `^8.2`. Composer's platform target is `8.2.0` to preserve compatibility when dependencies are resolved on newer development machines. Locked package versions did not change.
+
+An isolated official PHP 8.2.34 Windows runtime was downloaded from [PHP's download page](https://www.php.net/downloads.php?os=windows&version=8.2) and verified against its published SHA-256. It did not replace the installed development PHP or change hosting settings. On this runtime:
+
+- All **68 backend checks passed on SQLite**, and the same **68 passed on MariaDB 11.4.8** using a new empty test database.
+- The separate initialization-preservation check passed.
+- All **34 browser checks passed**, including first-login changes, workflow actions, folder copying, and desktop/mobile layouts, with no PHP runtime errors.
+- All **25 application and test PHP files passed syntax checks**.
+- Composer installation, platform requirement checks, and configuration validation passed. Validation reports only the existing missing-license metadata warning. Dependency audit reported no security advisories.
+
+PHP 8.2 support still requires the extensions and Argon2id listed in the README. This verifies application compatibility locally, not the production server's configuration. The deployment archive was rebuilt with the updated Composer metadata and autoloader.
 
 ## Launch checks requiring the hosting environment
 
