@@ -63,7 +63,21 @@ final class DB
             ? self::one("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1")
             : self::one('SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() LIMIT 1');
         if ($exists) throw new \RuntimeException('Initialization requires an empty dedicated database. Existing data will not be modified.');
-        $sql = file_get_contents(APP_ROOT . '/database/schema.sql');
+        self::executeSchema(file_get_contents(APP_ROOT . '/database/schema.sql'));
+        self::migrate();
+    }
+    /** Add tracking/configuration tables while preserving existing records. */
+    public static function migrate(): void
+    {
+        foreach (['users', 'projects', 'mail_outbox'] as $table) self::query("SELECT id FROM $table LIMIT 0");
+        self::executeSchema(file_get_contents(APP_ROOT . '/database/migrations/002-status-reminders.sql'));
+        self::executeSchema(file_get_contents(APP_ROOT . '/database/migrations/003-project-contacts.sql'));
+        $insert = self::sqlite() ? 'INSERT OR IGNORE' : 'INSERT IGNORE';
+        foreach (array_keys(ProjectContacts::SLOTS) as $slot) self::query("$insert INTO project_contacts(slot) VALUES (?)", [$slot]);
+        ProjectContacts::reviewers(true);
+    }
+    private static function executeSchema(string $sql): void
+    {
         if (self::sqlite()) {
             $sql = str_replace('BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY', 'INTEGER PRIMARY KEY AUTOINCREMENT', $sql);
             $sql = str_replace(['BIGINT UNSIGNED', 'TINYINT(1)', 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'], ['INTEGER', 'INTEGER', ''], $sql);

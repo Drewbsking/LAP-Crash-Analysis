@@ -8,26 +8,49 @@ final class Mail
 {
     /** A test-only transport; never configured by an HTTP request. */
     public static ?\Closure $testTransport = null;
-    public static function queue(?int $eventId, string $email, string $name, string $subject, string $html, string $text): void
+    public static function queue(?int $eventId, string $email, string $name, string $subject, string $html, string $text): int
     {
         DB::query('INSERT INTO mail_outbox(event_id, recipient, recipient_name, subject, html_body, text_body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [$eventId, strtolower(trim($email)), $name, $subject, $html, $text, \now()]);
+        return (int)DB::conn()->lastInsertId();
+    }
+    private static function projectRecipients(array $project): array
+    {
+        return ProjectContacts::recipients($project);
     }
     public static function milestone(int $eventId, array $project): void
     {
-        $stakeholders = DB::query('SELECT * FROM stakeholders ORDER BY id')->fetchAll();
-        $recipients = [];
-        foreach ($stakeholders as $person) {
-            if (!filter_var($person['email'], FILTER_VALIDATE_EMAIL)) throw new ValidationException(['An administrator must configure all four stakeholder email addresses before milestones can be saved.']);
-            $recipients[strtolower($person['email'])] = $person['full_name'];
-        }
-        $requester = DB::one('SELECT full_name, email FROM users WHERE id=?', [$project['requester_id']]);
-        $recipients[strtolower($requester['email'])] = $requester['full_name'];
+        $recipients = self::projectRecipients($project);
         $label = Projects::STATUSES[$project['status']];
         $subject = 'Crash analysis · ' . $project['rcoc_number'] . ' · ' . $label;
         $link = \app_url('/project.php?id=' . $project['id']);
         $text = $project['name'] . "\nRCOC project: " . $project['rcoc_number'] . "\nMDOT job: " . $project['mdot_number'] . "\nStatus: $label\nNeeded by: " . \local_date($project['needed_by']) . " (signed and complete)\nProject: $link";
         $html = '<h2>' . \h($project['name']) . '</h2><p><strong>' . \h($label) . '</strong></p><p>RCOC project: ' . \h($project['rcoc_number']) . '<br>MDOT job: ' . \h($project['mdot_number']) . '<br>Needed by: ' . \h(\local_date($project['needed_by'])) . ' (signed and complete)</p><p><a href="' . \h($link) . '">View project</a></p><p>Sign in to view project details.</p>';
         foreach ($recipients as $email => $name) self::queue($eventId, $email, $name, $subject, $html, $text);
+    }
+    /** Reminder records and recipient messages are committed by Reminders together. */
+    public static function reminder(array $project, \DateTimeImmutable $asOf): array
+    {
+        $recipients = self::projectRecipients($project);
+        $label = Projects::STATUSES[$project['status']];
+        $submitted = \local_time($project['created_at']);
+        $needed = \local_date($project['needed_by']);
+        $localDay = $asOf->setTimezone(new \DateTimeZone('America/New_York'))->format('Y-m-d');
+        $overdue = Projects::overdue($project, $localDay) ? 'Overdue - awaiting signed completion.' : '';
+        $link = \app_url('/project.php?id=' . $project['id']);
+        $subject = 'Crash analysis reminder · ' . $project['rcoc_number'] . ' · ' . $label;
+        $text = "Two-week status reminder\n\n" . $project['name'] . "\nRCOC project: " . $project['rcoc_number']
+            . "\nMDOT job: " . $project['mdot_number'] . "\nStatus: $label\nSubmitted: $submitted\nNeeded by: $needed (signed and complete)\n"
+            . ($overdue ? "$overdue\n" : '') . "\nView current status: $link\n\n"
+            . 'Status reminders are sent every two weeks from submission until the project is marked Complete. Sign in to view project details.';
+        $html = '<h2>Two-week status reminder</h2><h3>' . \h($project['name']) . '</h3><p><strong>' . \h($label) . '</strong></p>'
+            . '<p>RCOC project: ' . \h($project['rcoc_number']) . '<br>MDOT job: ' . \h($project['mdot_number'])
+            . '<br>Submitted: ' . \h($submitted) . '<br>Needed by: ' . \h($needed) . ' (signed and complete)</p>'
+            . ($overdue ? '<p><strong>' . \h($overdue) . '</strong></p>' : '')
+            . '<p><a href="' . \h($link) . '">View current project status</a></p>'
+            . '<p>Status reminders are sent every two weeks from submission until the project is marked Complete. Sign in to view project details.</p>';
+        $ids = [];
+        foreach ($recipients as $email => $name) $ids[] = self::queue(null, $email, $name, $subject, $html, $text);
+        return $ids;
     }
     public static function deliverPending(int $limit = 25): void
     {
@@ -36,9 +59,30 @@ final class Mail
     }
     public static function deliver(int $id): bool
     {
-        $row = DB::transaction(function () use ($id): ?array {
+        $reminderProjectId = Reminders::projectForMail($id);
+        $milestone = DB::one('SELECT e.project_id FROM mail_outbox m JOIN project_events e ON e.id=m.event_id WHERE m.id=?', [$id]);
+        $projectId = $reminderProjectId ?? ($milestone ? (int)$milestone['project_id'] : null);
+        $row = DB::transaction(function () use ($id, $projectId, $reminderProjectId): ?array {
+            // Match completion's project-then-outbox lock order.
+            $project = $projectId === null ? null : DB::one('SELECT * FROM projects WHERE id=?' . DB::lock(), [$projectId]);
             $row = DB::one('SELECT * FROM mail_outbox WHERE id=?' . DB::lock(), [$id]);
             if (!$row || !in_array($row['state'], ['pending', 'failed'], true)) return null;
+            if ($reminderProjectId !== null && $project && $project['status'] === 'complete') {
+                DB::query("UPDATE mail_outbox SET state='cancelled', last_error='Project complete; reminder cancelled.', locked_at=NULL WHERE id=?", [$id]);
+                return null;
+            }
+            if ($project) {
+                try {
+                    $recipients = self::projectRecipients($project);
+                } catch (ValidationException $e) {
+                    DB::query("UPDATE mail_outbox SET state='failed', last_error='Review the project contacts and account email addresses in People.', locked_at=NULL WHERE id=?", [$id]);
+                    return null;
+                }
+                if (!isset($recipients[strtolower(trim($row['recipient']))])) {
+                    DB::query("UPDATE mail_outbox SET state='cancelled', last_error='Recipient is no longer assigned to this project.', locked_at=NULL WHERE id=?", [$id]);
+                    return null;
+                }
+            }
             DB::query("UPDATE mail_outbox SET state='sending', locked_at=?, attempts=attempts+1 WHERE id=?", [\now(), $id]);
             return $row;
         });

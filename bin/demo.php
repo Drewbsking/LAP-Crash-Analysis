@@ -14,7 +14,6 @@ function seed_demo(): void
         Auth::changePassword($id, $temp, $password);
         $ids[$username] = $id;
     }
-    foreach (['Andrew Bates'=>'bates','Jeremy Miller'=>'jeremy','Andrew Peters'=>'peters','Jacob Mayich'=>'mayich'] as $name=>$username) DB::query('UPDATE stakeholders SET email=? WHERE full_name=?', [$username.'@example.test',$name]);
     $day = new DateTimeImmutable(today());
     $samples = [
         ['Maple Road rehabilitation', 'DEMO-58001', 14, '3R', 'Southfield Road to Cranbrook Road', 'entered', 'peters', ['Pavement markings','Guardrail updates']],

@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS project_contacts (
+ slot VARCHAR(20) PRIMARY KEY,
+ user_id BIGINT UNSIGNED NULL,
+ FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

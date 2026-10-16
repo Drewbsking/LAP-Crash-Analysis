@@ -1,5 +1,31 @@
 # Verification
 
+## Per-project recipients and requester filter — October 16, 2026
+
+Milestones and two-week reminders now go to the requester and two individual project contact accounts, initially Jeremy Miller and Andrew Bates. The old stakeholder address form is removed. A requester filter combines with dashboard search, status, construction year, and pagination; project viewing permissions remain unchanged.
+
+Verified locally on PHP **8.2.34**:
+
+- **24 recipient/filter checks passed on SQLite and MariaDB 11.4.8**. They cover exact recipients for Peters/Mayich requests, reviewer/requester deduplication, exclusion of additional administrators/analysts, retired address-list independence, cancellation of obsolete queued recipients, current account emails, stable contact IDs, administrative permissions, migration preservation, invalid filters, inactive requesters, and pagination.
+- The existing **68 backend, 53 invitation/account, and 35 reminder checks passed on both databases**, with notification expectations updated to the new recipient rule. The initialization-preservation check passed.
+- **61 Chromium browser checks passed**, including requester filter keyboard access, combining and resetting filters, persistence through pagination, unchanged visibility of other requesters' projects, removal of the address form, contact selection/CSRF checks, reminder recipients, and mobile layouts. No PHP runtime or JavaScript errors were reported.
+- All **32 PHP files passed syntax checks**. Composer validation passed with only the existing missing-license metadata warning. Mobile dashboard and People screenshots were visually reviewed.
+
+No live accounts, projects, or email were modified during verification. Run `migrate` after deployment, even if reminder tables were already installed, and verify Jeremy/Bates under **People → Project contacts**. Previously sent email cannot be recalled; pending and failed project messages are rechecked against the current recipients before delivery.
+
+## Two-week status reminders — October 16, 2026
+
+The existing `mail:work` cron command now queues status reminders at 14-day anniversaries of submission until Complete. A repeatable migration adds two tables for reminder periods and their notification records. It does not rewrite existing application records.
+
+Verified locally on PHP **8.2.34**:
+
+- **35 reminder checks passed on SQLite and MariaDB 11.4.8**, using separate disposable databases. Coverage includes adding tables to a populated original schema, repeated migration, delivery before migration, day-14/day-28 boundaries, Eastern daylight saving changes, all active statuses, overdue deadlines, recipient deduplication, HTML escaping, missing addresses, SMTP retry, transactional rollback, missed intervals, overlapping cron workers, and simultaneous completion.
+- The existing **68 backend checks and 53 invitation/account checks passed on both databases**. The separate initialization-preservation check passed on SQLite.
+- **52 Chromium browser checks passed**, including invocation of the actual cron command, reminder delivery through the simulated transport, cancellation on completion, project links in notification history, and removal of Retry for cancelled messages. Desktop/mobile checks passed without PHP runtime or JavaScript errors.
+- All **30 PHP files passed syntax checks**. Composer configuration validation passed with only the existing missing-license metadata warning.
+
+No production emails were sent or live database records modified during verification. SMTP failure and success were simulated. Reminders already in flight cannot be recalled; pending and failed reminders are cancelled when a project is completed. See the README for the required `migrate` deployment step and the existing cron command.
+
 ## Email sign-in update — October 16, 2026
 
 Staff now sign in with their saved email address. Account forms no longer ask for a separate username, and welcome emails identify the sign-in email. Existing usernames and passwords continue to work. The original username column is retained for compatibility; no database migration is required.

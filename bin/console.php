@@ -2,7 +2,7 @@
 declare(strict_types=1);
 require dirname(__DIR__) . '/app/bootstrap.php';
 if (PHP_SAPI !== 'cli') exit;
-use App\{Auth, DB, Mail, Projects};
+use App\{Auth, DB, Mail, Projects, Reminders, ProjectContacts};
 
 $command = $argv[1] ?? 'help';
 switch ($command) {
@@ -30,8 +30,21 @@ switch ($command) {
         Auth::createUser($input + ['email' => $email, 'full_name' => $name, 'role' => 'admin'], $password);
         echo "Administrator created. Sign in with your email address.\nTemporary password (shown once): $password\nChange it at first sign-in.\n";
         break;
+    case 'migrate':
+        DB::migrate();
+        echo "Database updates are ready, including reminders and project contacts. Existing records were preserved.\n";
+        break;
     case 'mail:work':
-        Mail::deliverPending(100);
+        try {
+            if (Reminders::installed()) {
+                $reminders = Reminders::queueDue();
+                echo 'Status reminders queued: ' . $reminders['queued'] . '; recipient configuration failures: ' . $reminders['failed'] . ".\n";
+            } else {
+                echo "Status reminders need setup: run php bin/console.php migrate. Existing email delivery remains active.\n";
+            }
+        } finally {
+            Mail::deliverPending(100);
+        }
         echo "Pending email batch processed. Review failed deliveries in Notifications.\n";
         break;
     case 'mail:test':
@@ -45,13 +58,15 @@ switch ($command) {
     case 'check':
         $version = DB::conn()->getAttribute(PDO::ATTR_SERVER_VERSION);
         echo 'PHP: ' . PHP_VERSION . "\nDatabase: " . DB::conn()->getAttribute(PDO::ATTR_DRIVER_NAME) . ' ' . $version . "\n";
-        foreach (['users','projects','project_events','mail_outbox','stakeholders','password_resets','rate_limits'] as $table) {
+        foreach (['users','projects','project_events','mail_outbox','password_resets','rate_limits'] as $table) {
             echo $table . ': ' . DB::query("SELECT COUNT(*) FROM $table")->fetchColumn() . " rows\n";
         }
-        $missing = DB::query("SELECT COUNT(*) FROM stakeholders WHERE email IS NULL OR email=''")->fetchColumn();
-        echo "Stakeholder addresses missing: $missing\nMail transport: " . env('MAIL_TRANSPORT', 'smtp') . "\n";
+        $contactsReady = ProjectContacts::ready() ? 'ready (requester + two selected accounts)' : 'select the two project contacts in People';
+        echo 'Project contact settings: ' . (ProjectContacts::installed() ? 'ready' : 'run php bin/console.php migrate') . "\n";
+        echo 'Status reminders: ' . (Reminders::installed() ? 'ready (every 14 days until Complete)' : 'run php bin/console.php migrate') . "\n";
+        echo "Project notifications: $contactsReady\nMail transport: " . env('MAIL_TRANSPORT', 'smtp') . "\n";
         echo 'HTTPS site URL: ' . (str_starts_with(env('APP_URL'), 'https://') ? 'configured' : 'not configured (local preview only)') . "\n";
         break;
     default:
-        echo "LAP Crash Analysis commands:\n  init [--demo]                 Initialize an empty dedicated database\n  create-admin EMAIL NAME       Create the first administrator\n  check                        Check database and configuration\n  mail:work                    Deliver pending email (safe for cron)\n  mail:test EMAIL               Send one delivery test to a controlled address\n";
+        echo "LAP Crash Analysis commands:\n  init [--demo]                 Initialize an empty dedicated database\n  migrate                      Update an existing database without replacing records\n  create-admin EMAIL NAME       Create the first administrator\n  check                        Check database and configuration\n  mail:work                    Queue due status reminders and deliver pending email\n  mail:test EMAIL               Send one delivery test to a controlled address\n";
 }

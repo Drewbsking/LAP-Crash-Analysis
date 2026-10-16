@@ -37,14 +37,13 @@ foreach ([['peters','Andrew Peters','design'],['mayich','Jacob Mayich','design']
     $id = Auth::createUser(['username'=>$username,'full_name'=>$name,'email'=>$username.'@example.test','role'=>$role], $temp, $admin);
     Auth::changePassword($id,$temp,$password); $users[$username]=$id;
 }
-foreach (['Andrew Bates'=>'bates','Andrew Peters'=>'peters','Jacob Mayich'=>'mayich','Jeremy Miller'=>'jeremy'] as $name=>$username) DB::query('UPDATE stakeholders SET email=? WHERE full_name=?', [$username.'@example.test',$name]);
 rejects(fn()=>Projects::create($users['jeremy'], form(), bin2hex(random_bytes(32))), 'Analyst cannot submit requests');
 $token = bin2hex(random_bytes(32));
 $id = Projects::create($users['peters'], form(), $token);
 ok(Projects::get($id)['status']==='entered', 'New request enters first milestone');
 ok(Projects::get($id)['rcoc_number']==='001234' && Projects::get($id)['mdot_number']==='000987', 'Leading zeros preserved');
-ok(number('mail_outbox')===4, 'Requester deduplicated against four stakeholders');
-ok(Projects::create($users['peters'], form(), $token)===$id && number('project_events')===1 && number('mail_outbox')===4, 'Repeated submission token does not repeat milestone or email');
+ok(number('mail_outbox')===3, 'Request goes only to its requester and the two project contacts');
+ok(Projects::create($users['peters'], form(), $token)===$id && number('project_events')===1 && number('mail_outbox')===3, 'Repeated submission token does not repeat milestone or email');
 try { Projects::create($users['peters'], form(), bin2hex(random_bytes(32))); throw new RuntimeException('Expected duplicate'); } catch (ValidationException $e) { ok($e->existingProjectId===$id, 'Duplicate project links to existing request'); }
 rejects(fn()=>Projects::create($users['extra'], form(), $token), 'Submission token cannot be reused by another requester');
 rejects(fn()=>Projects::validate(array_replace(form(),['name'=>''])), 'Required fields enforced');
@@ -76,19 +75,19 @@ ok(!Projects::overdue(Projects::get($id),'2026-10-16'), 'Completed project is ne
 rejects(fn()=>Projects::update($admin,$id,5,form()), 'Completed project details are read-only');
 rejects(fn()=>Projects::folder($users['jeremy'],$id,5,'G:\\New Folder'), 'Completed folder is read-only');
 rejects(fn()=>Projects::advance($admin,$id,5,'started',true), 'Completed project cannot reopen');
-ok(number('mail_outbox')===16, 'Exactly one notification per recipient at every milestone');
+ok(number('mail_outbox')===12, 'Exactly one notification per recipient at every milestone');
 ok((int)DB::query("SELECT COUNT(*) FROM project_events WHERE event_type='milestone'")->fetchColumn()===4, 'All four milestone events preserved');
 $id2 = Projects::create($users['extra'],form('001235'),bin2hex(random_bytes(32)));
-ok(number('mail_outbox')===21, 'Requester outside stakeholder group is included');
+ok(number('mail_outbox')===15, 'Each new requester receives their own project notifications');
 Projects::folder($admin,$id2,1,'G:\\A TOC');
 Projects::advance($admin,$id2,2,'ready_for_review',true);
 Projects::advance($users['jeremy'],$id2,3,'complete',true);
 ok(Projects::get($id2)['status']==='complete','Jeremy can also confirm final signing');
 $before = number('projects');
-DB::query('UPDATE stakeholders SET email=NULL WHERE full_name=?',['Andrew Peters']);
-rejects(fn()=>Projects::create($users['peters'],form('missing-address'),bin2hex(random_bytes(32))), 'Missing recipient configuration prevents incomplete notification setup');
+DB::query('UPDATE users SET is_active=0 WHERE id=?', [$users['jeremy']]);
+rejects(fn()=>Projects::create($users['peters'],form('missing-address'),bin2hex(random_bytes(32))), 'Inactive project contact prevents incomplete notification setup');
 ok(number('projects')===$before, 'Notification configuration failure rolls back request');
-DB::query('UPDATE stakeholders SET email=? WHERE full_name=?',['peters@example.test','Andrew Peters']);
+DB::query('UPDATE users SET is_active=1 WHERE id=?', [$users['jeremy']]);
 $received=[];
 Mail::$testTransport = function(array $message) use (&$received): void { $received[]=$message; };
 Mail::deliverPending(100);
@@ -98,7 +97,7 @@ ok(count($received)===number('mail_outbox'), 'Sent notifications are not resent'
 Mail::$testTransport = function(): void { throw new RuntimeException('Simulated mail outage'); };
 $failedId = Projects::create($users['peters'],form('mail-failure'),bin2hex(random_bytes(32)));
 Mail::deliverPending(100);
-ok(Projects::get($failedId)!==null && (int)DB::query("SELECT COUNT(*) FROM mail_outbox WHERE state='failed'")->fetchColumn()===4, 'SMTP failure keeps project saved and records failures');
+ok(Projects::get($failedId)!==null && (int)DB::query("SELECT COUNT(*) FROM mail_outbox WHERE state='failed'")->fetchColumn()===3, 'SMTP failure keeps project saved and records failures');
 $mailId = (int)DB::query("SELECT id FROM mail_outbox WHERE state='failed' ORDER BY id LIMIT 1")->fetchColumn();
 rejects(fn()=>Mail::retry($users['peters'],$mailId), 'Only administrator can retry email');
 Mail::$testTransport = function(array $message) use (&$received): void { $received[]=$message; };
@@ -157,5 +156,5 @@ for($i=0;$i<2;$i++){$pipes=[];$process=proc_open([PHP_BINARY,__DIR__.'/race.php'
 $outputs=[];
 foreach($jobs as [$process,$pipes]){$outputs[]=trim(stream_get_contents($pipes[1]));$err=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);if(proc_close($process)!==0)throw new RuntimeException($err);}
 sort($outputs);ok($outputs===['changed','stale'],'Concurrent milestone updates have one winner and one stale rejection');
-ok((int)DB::query('SELECT COUNT(*) FROM mail_outbox m JOIN project_events e ON e.id=m.event_id WHERE e.project_id=?',[$raceId])->fetchColumn()===8,'Concurrent milestone creates one recipient set');
+ok((int)DB::query('SELECT COUNT(*) FROM mail_outbox m JOIN project_events e ON e.id=m.event_id WHERE e.project_id=?',[$raceId])->fetchColumn()===6,'Concurrent milestone creates one recipient set');
 echo "\n$checks checks passed on " . DB::conn()->getAttribute(PDO::ATTR_DRIVER_NAME) . ".\n";

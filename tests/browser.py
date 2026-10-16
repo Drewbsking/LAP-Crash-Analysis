@@ -4,6 +4,7 @@ Never uses the preview or production database. Screenshots and logs remain in
 ignored test-results/. Set PLAYWRIGHT_CHROMIUM to an existing browser executable.
 """
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
@@ -12,6 +13,7 @@ import sqlite3
 import subprocess
 import time
 import urllib.request
+from urllib.parse import parse_qs, urlparse
 import uuid
 from playwright.sync_api import sync_playwright, expect
 
@@ -81,6 +83,21 @@ try:
         no_overflow(design, "Desktop dashboard")
         check(design.get_by_text("Overdue", exact=True).count() > 0, "Overdue review is visible on dashboard")
         check(design.get_by_role("link", name="Orion Road shoulder improvements", exact=True).count() == 1, "Designer sees another requester's project")
+        requester_filter=design.get_by_label("REQUESTER",exact=True)
+        requester_filter.focus()
+        check(design.evaluate("document.activeElement.id")=="requester","Requester filter is keyboard focusable")
+        requester_filter.select_option(label="Jacob Mayich")
+        design.get_by_role("button",name="Filter",exact=True).click()
+        check(all(name=="Jacob Mayich" for name in design.locator("tbody .requester-col").all_text_contents()),"Requester dropdown filters the project table")
+        design.get_by_label("FIND A PROJECT",exact=True).fill("Orion")
+        design.get_by_label("STATUS",exact=True).select_option("started")
+        with sqlite3.connect(DB) as connection:
+            construction_year=connection.execute("SELECT construction_year FROM projects WHERE name='Orion Road shoulder improvements'").fetchone()[0]
+        design.get_by_label("CONSTRUCTION YEAR",exact=True).select_option(str(construction_year))
+        design.get_by_role("button",name="Filter",exact=True).click()
+        check(design.locator("tbody tr").count()==1 and design.get_by_role("link",name="Orion Road shoulder improvements",exact=True).count()==1,"Requester filter combines with search, status, and construction year")
+        design.get_by_role("link",name="Reset",exact=True).click()
+        check(design.get_by_label("REQUESTER",exact=True).input_value()=="" and design.locator("tbody tr").count()==5,"Reset restores all requesters and active projects")
         response=design.goto(BASE + "/admin/users.php")
         check(response.status == 403, "Designer cannot access account administration")
         design.goto(BASE + "/request.php")
@@ -126,6 +143,16 @@ try:
         analyst.screenshot(path=str(OUT / "project-desktop.png"), full_page=True)
         check(True,"Jeremy starts analysis and marks it Ready for Review")
 
+        # The existing cron command discovers and sends a due reminder.
+        with sqlite3.connect(DB) as connection:
+            submitted=(datetime.now(timezone.utc)-timedelta(days=15)).strftime("%Y-%m-%d %H:%M:%S")
+            connection.execute("UPDATE projects SET created_at=? WHERE id=?",(submitted,project_id))
+        cron=subprocess.run(["php","bin/console.php","mail:work"],cwd=ROOT,env=ENV,check=True,capture_output=True,text=True,creationflags=FLAGS)
+        with sqlite3.connect(DB) as connection:
+            reminder_mail=connection.execute("SELECT m.id,m.recipient,m.state,m.text_body FROM mail_outbox m JOIN reminder_deliveries d ON d.mail_id=m.id JOIN project_reminders r ON r.id=d.reminder_id WHERE r.project_id=?",(project_id,)).fetchall()
+            check(len(reminder_mail)==3 and all(m[2]=="sent" and "Status: Ready for Review" in m[3] for m in reminder_mail) and {m[1] for m in reminder_mail}=={"bates@example.test","jeremy@example.test","peters@example.test"},"Existing cron command sends the due status reminder to deduplicated recipients")
+            connection.execute("UPDATE mail_outbox SET state='pending' WHERE id=?",(reminder_mail[0][0],))
+
         admin_context,admin=login(browser,"bates",viewport={"width":1440,"height":1000})
         admin.goto(project_url)
         admin.get_by_role("checkbox",name="Review and external signing are complete.",exact=True).check()
@@ -135,7 +162,20 @@ try:
         check(admin.get_by_role("link",name="Edit details",exact=True).count()==0,"Completed projects expose no edit action")
         response=admin.goto(BASE + f"/request.php?id={project_id}")
         check(response.status==403,"Completed project edit URL is forbidden")
+        admin.goto(BASE+"/admin/settings.php")
+        reminder_row=admin.locator("tr").filter(has_text="Crash analysis reminder").filter(has_text="BROWSER-001").filter(has_text=reminder_mail[0][1])
+        check(reminder_row.count()==1 and reminder_row.get_by_text("Cancelled",exact=True).count()==1 and reminder_row.get_by_role("button",name="Retry",exact=True).count()==0,"Completion cancels queued reminder and Notifications does not offer retry")
+        check(reminder_row.get_by_role("link",name="View project",exact=True).get_attribute("href").endswith("id="+str(project_id)),"Reminder delivery history links to its project")
+        check(admin.locator('input[type="email"]').count()==0,"Notifications no longer has a separate stakeholder email form")
         admin.goto(BASE+"/admin/users.php")
+        contacts=admin.locator("#project-contacts")
+        expect(contacts.get_by_label("Traffic Safety contact",exact=True).locator("option:checked")).to_have_text("Jeremy Miller")
+        expect(contacts.get_by_label("Review contact",exact=True).locator("option:checked")).to_have_text("Andrew Bates")
+        bad_contacts=admin.request.post(BASE+"/admin/users.php",form={"action":"contacts","csrf":"invalid","contact_analyst":"2","contact_admin":"1"})
+        check(bad_contacts.status==403,"Project contact changes require CSRF protection")
+        contacts.get_by_role("button",name="Save project contacts",exact=True).click()
+        expect(admin.get_by_text("Project contacts saved. Project emails go to these two accounts and the requester.",exact=True)).to_be_visible()
+        check(True,"Administrator manages two account contacts without re-entering email addresses")
         admin.get_by_label("Full name",exact=True).last.fill("Browser Test Designer")
         check(admin.get_by_label("Username",exact=True).count()==0,"Account creation and editing need no separate username")
         admin.get_by_label("Email address",exact=True).fill("browseruser@example.test")
@@ -225,6 +265,7 @@ try:
         for path in ["/admin/users.php","/admin/settings.php"]:
             admin.goto(BASE+path)
             no_overflow(admin,"Mobile " + path)
+            admin.screenshot(path=str(OUT/("people-mobile.png" if path.endswith("users.php") else "notifications-mobile.png")),full_page=True)
 
         admin.goto(BASE+"/admin/users.php")
         person=admin.locator(".admin-person").filter(has_text="Browser Test Designer")
@@ -241,6 +282,22 @@ try:
         persisted.goto(project_url)
         expect(persisted.get_by_text("Bridge approach safety",exact=True)).to_be_visible()
         check(True,"Project details persist across browser sessions")
+        # Disposable pagination fixtures verify every filter survives Next/Previous.
+        with sqlite3.connect(DB) as connection:
+            connection.row_factory=sqlite3.Row
+            fixture=dict(connection.execute("SELECT * FROM projects WHERE id=?",(project_id,)).fetchone())
+            fixture.pop("id")
+            owner=fixture["requester_id"]
+            fixture.update(status="entered",version=1,folder_path="")
+            for index in range(27):
+                fixture.update(rcoc_number=f"PAGINATION-{index}",name=f"Pagination fixture {index}",submission_token=uuid.uuid4().hex*2)
+                connection.execute("INSERT INTO projects("+",".join(fixture)+") VALUES ("+",".join("?" for _ in fixture)+")",tuple(fixture.values()))
+        persisted.goto(BASE+f"/dashboard.php?status=entered&year=2027&requester={owner}&q=Pagination+fixture")
+        next_link=persisted.get_by_role("link",name="Next",exact=True)
+        next_filters=parse_qs(urlparse(next_link.get_attribute("href")).query)
+        check(next_filters.get("requester")==[str(owner)] and next_filters.get("status")==["entered"] and next_filters.get("year")==["2027"] and next_filters.get("q")==["Pagination fixture"],"Pagination links preserve requester and all other filters")
+        next_link.click()
+        check(persisted.locator("tbody tr").count()==2 and persisted.get_by_label("REQUESTER",exact=True).input_value()==str(owner),"Requester filter remains selected on the second page")
         check(not errors,"No JavaScript page errors")
         browser.close()
     server.terminate()

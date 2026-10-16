@@ -20,6 +20,9 @@ if (is_post()) {
 }
 $events = App\DB::query('SELECT e.*, u.full_name AS actor_name FROM project_events e JOIN users u ON u.id=e.actor_id WHERE e.project_id=? ORDER BY e.id DESC', [$id])->fetchAll();
 $failedMail = (int)App\DB::query("SELECT COUNT(*) FROM mail_outbox m JOIN project_events e ON e.id=m.event_id WHERE e.project_id=? AND m.state<>'sent'", [$id])->fetchColumn();
+if (App\Reminders::installed()) {
+    $failedMail += (int)App\DB::query("SELECT COUNT(*) FROM mail_outbox m JOIN reminder_deliveries d ON d.mail_id=m.id JOIN project_reminders r ON r.id=d.reminder_id WHERE r.project_id=? AND m.state IN ('pending','failed','sending')", [$id])->fetchColumn();
+}
 $pageTitle = $project['name'];
 $displayChange = function (string $key, mixed $value): string {
     if ($key === 'safety_improvements') return implode(', ', json_decode((string)$value, true) ?? []);

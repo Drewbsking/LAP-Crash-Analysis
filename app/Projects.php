@@ -149,6 +149,7 @@ final class Projects
             $next = ['started' => 'ready_for_review', 'ready_for_review' => 'complete'];
             if (($next[$project['status']] ?? null) !== $target || !$project['folder_path']) throw new ValidationException(['Milestones must be completed in order.']);
             DB::query('UPDATE projects SET status=?, version=version+1, updated_at=? WHERE id=?', [$target, \now(), $id]);
+            if ($target === 'complete') Reminders::cancelPending($id);
             $event = self::event($id, $actorId, 'milestone', $project['status'], $target, []);
             Mail::milestone($event, self::get($id));
         });
@@ -166,6 +167,11 @@ final class Projects
         elseif (isset(self::STATUSES[$status])) { $where[] = 'p.status=?'; $params[] = $status; }
         $year = is_string($filters['year'] ?? null) ? $filters['year'] : '';
         if (preg_match('/^\d{4}$/', $year)) { $where[] = 'p.construction_year=?'; $params[] = (int)$year; }
+        $requester = is_string($filters['requester'] ?? null) ? $filters['requester'] : '';
+        if ($requester !== '') {
+            $where[] = 'p.requester_id=?';
+            $params[] = filter_var($requester, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: 0;
+        }
         $q = trim(is_string($filters['q'] ?? null) ? $filters['q'] : '');
         if ($q !== '') {
             $where[] = "(p.name LIKE ? ESCAPE '!' OR p.rcoc_number LIKE ? ESCAPE '!' OR p.mdot_number LIKE ? ESCAPE '!')";
