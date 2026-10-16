@@ -7,7 +7,7 @@ $currentPage = basename($_SERVER['SCRIPT_NAME'] ?? '');
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Request and track local agency project crash reviews at the Road Commission for Oakland County.">
+  <meta name="description" content="Provide required project information up front, record crash analysis requests, and track their progress at the Road Commission for Oakland County.">
   <title><?= h($pageTitle ?? 'Projects') ?> · RCOC Crash Analysis</title>
   <link rel="icon" type="image/svg+xml" href="<?= h(app_path('/assets/icon.svg')) ?>">
   <link rel="stylesheet" href="<?= h(app_path('/assets/app.css')) ?>">

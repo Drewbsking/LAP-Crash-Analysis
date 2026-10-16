@@ -1,6 +1,22 @@
-# Verification — October 9, 2026
+# Verification
 
-The portal was implemented and verified locally. No production deployment or actual staff email delivery was performed.
+## Welcome email update — October 16, 2026
+
+The welcome email update was verified locally using PHP **8.2.34**:
+
+- **38 invitation checks passed on SQLite and on MariaDB 11.4.8**, each using a separate disposable database. They cover administrator permissions, atomic account/token/email creation, recipient selection, portal-purpose copy, escaped names, 24-hour setup links, one-hour recovery links, expiry, single use, password policy, SMTP failure/retry, email changes, deactivation, resending, rollback, and simultaneous password setup.
+- The existing **68 backend checks passed on both databases**, and the initialization-preservation check passed.
+- **47 Chromium browser checks passed**, including welcome delivery through the simulated transport, resending, invalidation of older links, password setup, CSRF rejection, first-login recovery, workflow permissions, and desktop/mobile layouts. No PHP runtime errors or browser errors were reported.
+- Login pages at 320, 390, and 1440px and the password setup page at 390px fit without horizontal overflow. Desktop/mobile login and mobile password setup screenshots were visually reviewed.
+- All **27 application and test PHP files passed syntax checks**. Composer configuration validation passed with only the existing missing-license metadata warning. Dependency versions did not change.
+
+No production accounts were created or emailed during this update. Email tests used a local simulated transport, including forced delivery failures. The user previously confirmed receipt of a production SMTP test message; the new welcome flow still needs a controlled mailbox check after deploying this update.
+
+The update reuses the existing tables and requires **no database migration or initialization**. Existing users are not emailed automatically. Deployment and resend instructions are in the README.
+
+## Initial implementation — October 9, 2026
+
+The initial portal was implemented and verified locally. No production deployment or actual staff email delivery was performed during that verification.
 
 ## Completed checks
 

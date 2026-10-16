@@ -91,6 +91,56 @@ final class Auth
             throw $e;
         }
     }
+    /** Create the account, setup token, and welcome notification together. Send after commit. */
+    public static function inviteUser(array $input, int $actorId): array
+    {
+        return DB::transaction(function () use ($input, $actorId): array {
+            $userId = self::createUser($input, self::temporaryPassword(), $actorId);
+            $user = DB::one('SELECT * FROM users WHERE id=?', [$userId]);
+            return ['user_id' => $userId, 'mail_id' => self::queueWelcome($user)];
+        });
+    }
+    public static function resendWelcome(int $actorId, int $userId): int
+    {
+        return DB::transaction(function () use ($actorId, $userId): int {
+            self::actor($actorId, ['admin']);
+            $user = DB::one('SELECT * FROM users WHERE id=?' . DB::lock(), [$userId]);
+            if (!$user || !$user['is_active'] || !$user['must_reset']) {
+                throw new ValidationException(['Welcome emails are available only for active accounts that still need to set a password.']);
+            }
+            return self::queueWelcome($user);
+        });
+    }
+    /** Call inside a transaction while the user's row is locked (or newly inserted). */
+    private static function passwordLink(int $userId, int $lifetime): string
+    {
+        $token = bin2hex(random_bytes(32));
+        DB::query('UPDATE password_resets SET used_at=? WHERE user_id=? AND used_at IS NULL', [\now(), $userId]);
+        DB::query('INSERT INTO password_resets(user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?)', [$userId, hash('sha256', $token), gmdate('Y-m-d H:i:s', time() + $lifetime), \now()]);
+        return \app_url('/reset-password.php?token=' . $token);
+    }
+    private static function queueWelcome(array $user): int
+    {
+        $link = self::passwordLink((int)$user['id'], 86400);
+        $login = \app_url('/login.php');
+        $role = self::ROLES[$user['role']];
+        $purpose = 'The LAP Crash Analysis Portal collects the required project information up front when a crash analysis is requested. It records that the request was made and lets staff see where it stands, from Entered to Started, Ready for Review, and Complete.';
+        $html = '<h2>Welcome to RCOC Crash Analysis</h2><p>Hello ' . \h($user['full_name']) . ',</p>'
+            . '<p>Your staff account is ready. Use the link below to choose your password.</p>'
+            . '<h3>What the site is used for</h3><p>' . \h($purpose) . '</p>'
+            . '<p>Design staff submit project details and deadlines. Traffic Safety staff record analysis progress. Everyone can see whether a request has been submitted and its current status.</p>'
+            . '<p><strong>Username:</strong> ' . \h($user['username']) . '<br><strong>Role:</strong> ' . \h($role) . '</p>'
+            . '<p><a href="' . \h($link) . '">Set your password</a></p>'
+            . '<p>This link expires in 24 hours and can be used once. If a newer link is sent, use the newest one.</p>'
+            . '<p>After setting your password, <a href="' . \h($login) . '">sign in to the portal</a>. If the link expires, choose Forgot your password? on the sign-in page to request a fresh link, or contact Andrew Bates.</p>';
+        $text = 'Hello ' . $user['full_name'] . ",\n\nWelcome to RCOC Crash Analysis. Your staff account is ready.\n\n"
+            . $purpose . "\n\nDesign staff submit project details and deadlines. Traffic Safety staff record analysis progress. Everyone can see whether a request has been submitted and its current status.\n\n"
+            . 'Username: ' . $user['username'] . "\nRole: $role\n\nSet your password: $link\n"
+            . "This link expires in 24 hours and can be used once. If a newer link is sent, use the newest one.\n\n"
+            . "After setting your password, sign in: $login\nIf the link expires, use Forgot your password? on the sign-in page or contact Andrew Bates.\n";
+        Mail::queue(null, $user['email'], $user['full_name'], 'Welcome to RCOC Crash Analysis - set your password', $html, $text);
+        return (int)DB::conn()->lastInsertId();
+    }
     private static function validateUser(array $input): array
     {
         $values = [];
@@ -123,8 +173,12 @@ final class Auth
             if ($userId === $actorId && (!$active || $values['role'] !== 'admin')) throw new ValidationException(['You cannot deactivate or remove administrator access from your own account.']);
             if (!$remainingAdmins && (!$active || $values['role'] !== 'admin') && $target['role'] === 'admin') throw new ValidationException(['Keep at least one active administrator.']);
             try {
-                $revoke = ($target['role'] !== $values['role'] || (int)$target['is_active'] !== $active) ? 1 : 0;
+                $emailChanged = $target['email'] !== $values['email'];
+                $revoke = ($target['role'] !== $values['role'] || (int)$target['is_active'] !== $active || $emailChanged) ? 1 : 0;
                 DB::query('UPDATE users SET username=?, full_name=?, email=?, role=?, is_active=?, session_version=session_version+?, updated_at=? WHERE id=?', [...array_values($values), $active, $revoke, \now(), $userId]);
+                if ($emailChanged || !$active) {
+                    DB::query('UPDATE password_resets SET used_at=? WHERE user_id=? AND used_at IS NULL', [\now(), $userId]);
+                }
             } catch (\PDOException $e) {
                 if (str_starts_with((string)$e->getCode(), '23')) throw new ValidationException(['That username or email address is already in use.']);
                 throw $e;
@@ -164,21 +218,23 @@ final class Auth
         DB::transaction(function () use ($email): void {
             $user = DB::one('SELECT * FROM users WHERE email=? AND is_active=1' . DB::lock(), [$email]);
             if (!$user) return;
-            $token = bin2hex(random_bytes(32));
-            DB::query('UPDATE password_resets SET used_at=? WHERE user_id=? AND used_at IS NULL', [\now(), $user['id']]);
-            DB::query('INSERT INTO password_resets(user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?)', [$user['id'], hash('sha256', $token), gmdate('Y-m-d H:i:s', time() + 3600), \now()]);
-            $link = \app_url('/reset-password.php?token=' . $token);
+            $link = self::passwordLink((int)$user['id'], 3600);
             Mail::queue(null, $email, $user['full_name'], 'Reset your LAP Crash Analysis password', '<p>Hello ' . \h($user['full_name']) . ',</p><p><a href="' . \h($link) . '">Choose a new password</a>. This link expires in one hour and can be used once.</p><p>If you did not request this, you can ignore this email.</p>', "Reset your password: $link\nThis link expires in one hour and can be used once.");
         });
     }
     public static function resetWithToken(string $token, string $password): void
     {
         self::validatePassword($password);
+        if (!preg_match('/^[a-f0-9]{64}$/', $token)) throw new ValidationException(['This reset link is invalid or expired. Request a new link.']);
         DB::transaction(function () use ($token, $password): void {
-            $reset = DB::one('SELECT * FROM password_resets WHERE token_hash=?' . DB::lock(), [hash('sha256', $token)]);
-            if (!$reset || $reset['used_at'] || $reset['expires_at'] <= \now()) throw new ValidationException(['This reset link is invalid or expired. Request a new link.']);
+            // Lock the user first, matching invitation/resend/reset issuance, then
+            // reread the token under lock so concurrent submissions cannot reuse it.
+            $reset = DB::one('SELECT user_id FROM password_resets WHERE token_hash=?', [hash('sha256', $token)]);
+            if (!$reset) throw new ValidationException(['This reset link is invalid or expired. Request a new link.']);
             $user = DB::one('SELECT * FROM users WHERE id=?' . DB::lock(), [$reset['user_id']]);
             if (!$user || !$user['is_active']) throw new ValidationException(['This reset link is invalid or expired. Request a new link.']);
+            $reset = DB::one('SELECT * FROM password_resets WHERE token_hash=?' . DB::lock(), [hash('sha256', $token)]);
+            if (!$reset || $reset['used_at'] || $reset['expires_at'] <= \now()) throw new ValidationException(['This reset link is invalid or expired. Request a new link.']);
             self::replacePassword((int)$user['id'], $password, false);
         });
         self::logout();
