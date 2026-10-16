@@ -1,5 +1,18 @@
 # Verification
 
+## Email sign-in update — October 16, 2026
+
+Staff now sign in with their saved email address. Account forms no longer ask for a separate username, and welcome emails identify the sign-in email. Existing usernames and passwords continue to work. The original username column is retained for compatibility; no database migration is required.
+
+Verified locally on PHP **8.2.34**:
+
+- **53 invitation/account checks and 68 existing backend checks passed on both SQLite and MariaDB 11.4.8**, using new disposable databases. Added coverage includes email case/whitespace normalization, plus addresses, duplicate and invalid addresses, addresses longer than 100 characters, existing account access, email edits, revoked sessions, deactivation, and a shared attempt limit for email/legacy-username sign-in.
+- **49 Chromium browser checks passed**, including email sign-in, account creation without a username, welcome messages, password setup, account email changes, legacy username compatibility, and desktop/mobile layouts. No PHP runtime or JavaScript errors were reported.
+- Email-only and legacy initial-administrator command formats were checked against separate disposable databases. Neither sent email.
+- All **27 PHP files passed syntax checks**. Desktop and mobile sign-in screenshots were visually reviewed.
+
+No production accounts, passwords, or database records were changed during these checks. Deploy the updated source and test sign-in with the administrator's saved account email and current password.
+
 ## Welcome email update — October 16, 2026
 
 The welcome email update was verified locally using PHP **8.2.34**:

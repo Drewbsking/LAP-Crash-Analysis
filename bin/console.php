@@ -13,16 +13,22 @@ switch ($command) {
         if (in_array('--demo', $argv, true)) {
             require __DIR__ . '/demo.php';
             seed_demo();
-            echo "Fictional demo projects added. Local demo accounts: bates, jeremy, peters, mayich\nDemo password for all four: Demo-Only-2026!\n";
-        } else echo "Next: php bin/console.php create-admin bates your-work-email 'Andrew Bates'\n";
+            echo "Fictional demo projects added. Local demo accounts: bates@example.test, jeremy@example.test, peters@example.test, mayich@example.test\nDemo password for all four: Demo-Only-2026!\n";
+        } else echo "Next: php bin/console.php create-admin your-work-email 'Andrew Bates'\n";
         break;
     case 'create-admin':
-        $username = $argv[2] ?? '';
-        $email = $argv[3] ?? '';
-        $name = $argv[4] ?? 'Andrew Bates';
+        $email = $argv[2] ?? '';
+        $name = $argv[3] ?? 'Andrew Bates';
+        $input = [];
+        // Accept the previous USER EMAIL NAME command for older setup guides.
+        if (!str_contains($email, '@') && isset($argv[3]) && filter_var($argv[3], FILTER_VALIDATE_EMAIL)) {
+            $input['username'] = $email;
+            $email = $argv[3];
+            $name = $argv[4] ?? 'Andrew Bates';
+        }
         $password = Auth::temporaryPassword();
-        Auth::createUser(['username' => $username, 'email' => $email, 'full_name' => $name, 'role' => 'admin'], $password);
-        echo "Administrator created. Temporary password (shown once): $password\nChange it at first sign-in.\n";
+        Auth::createUser($input + ['email' => $email, 'full_name' => $name, 'role' => 'admin'], $password);
+        echo "Administrator created. Sign in with your email address.\nTemporary password (shown once): $password\nChange it at first sign-in.\n";
         break;
     case 'mail:work':
         Mail::deliverPending(100);
@@ -47,5 +53,5 @@ switch ($command) {
         echo 'HTTPS site URL: ' . (str_starts_with(env('APP_URL'), 'https://') ? 'configured' : 'not configured (local preview only)') . "\n";
         break;
     default:
-        echo "LAP Crash Analysis commands:\n  init [--demo]                 Initialize an empty dedicated database\n  create-admin USER EMAIL NAME Create the first administrator\n  check                        Check database and configuration\n  mail:work                    Deliver pending email (safe for cron)\n  mail:test EMAIL               Send one delivery test to a controlled address\n";
+        echo "LAP Crash Analysis commands:\n  init [--demo]                 Initialize an empty dedicated database\n  create-admin EMAIL NAME       Create the first administrator\n  check                        Check database and configuration\n  mail:work                    Deliver pending email (safe for cron)\n  mail:test EMAIL               Send one delivery test to a controlled address\n";
 }

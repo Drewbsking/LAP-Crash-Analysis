@@ -14,7 +14,7 @@ The current workspace has an ignored `.env` and a fictional demo database. Start
 php -S 127.0.0.1:8090 -t public
 ```
 
-Open **http://127.0.0.1:8090**. Demo usernames are `bates`, `jeremy`, `peters`, and `mayich`; all use **`Demo-Only-2026!`**. These accounts and sample project names are for local demonstration only. Email delivery is simulated and the preview displays a banner saying so.
+Open **http://127.0.0.1:8090**. Demo sign-in emails are `bates@example.test`, `jeremy@example.test`, `peters@example.test`, and `mayich@example.test`; all use **`Demo-Only-2026!`**. These accounts and sample project names are for local demonstration only. Email delivery is simulated and the preview displays a banner saying so.
 
 To set up a fresh checkout:
 
@@ -49,7 +49,8 @@ Then run `php bin/console.php init --demo` once. Initialization rejects database
 - All milestones notify the four configured stakeholders and the requester, with duplicate addresses removed. Ordinary detail/folder edits appear in history without milestone emails.
 - Enter all four stakeholder email addresses under **Notifications** before the first request. Missing addresses prevent a milestone save, so a request cannot silently omit a required stakeholder.
 - Failed mail does **not** undo a saved request. Administrators can retry it in Notifications. This page reports SMTP acceptance, not proof of inbox delivery.
-- Creating a staff account in **People** automatically queues a welcome email for that person and attempts delivery after saving. It explains the portal's purpose, includes their username and role, and provides a single-use password setup link valid for **24 hours**. They choose their password and then sign in normally. No password is emailed or displayed when creating staff accounts.
+- Staff sign in with their account email address and password. Email matching ignores case and surrounding spaces. Account creation and editing require no separate username. Existing accounts can immediately use their saved email and current password; their legacy usernames also continue to work. Changing an account email changes its email sign-in and revokes its sessions and outstanding setup/reset links. The original username column is retained internally for compatibility, so no schema change is required.
+- Creating a staff account in **People** automatically queues a welcome email for that person and attempts delivery after saving. It explains the portal's purpose, includes their sign-in email and role, and provides a single-use password setup link valid for **24 hours**. They choose their password and then sign in normally. No password is emailed or displayed when creating staff accounts.
 - For active accounts that still need a password change, **People → Edit account → Send welcome email** sends a new setup link, including for accounts created before this feature was added. It invalidates previous setup/reset links. Established users use **Forgot your password?** instead. If a welcome link expires, the person can also use that recovery page; recovery links last **one hour**.
 - Welcome emails use the same durable notification queue as milestone and password recovery emails. SMTP failure preserves the account and queued message; review or retry under **Notifications**. If the setup link has expired, send a new welcome email from People instead of retrying an expired message.
 - Users can be deactivated, not deleted. Account role, email, or active-status changes and password resets revoke existing sessions. Changing the email address or deactivating an account also invalidates outstanding setup/reset links.
@@ -68,7 +69,7 @@ Use a **separate, empty database** and a dedicated HTTPS hostname or subdirector
 3. Point the document root to **`public/`**. Keep `app/`, `bin/`, `database/`, `.env`, `vendor/`, and `storage/` outside the web root. Only the PHP service account should have access to private configuration; give it write access to `storage/` and its private PHP session directory.
 4. Copy `.env.example` to `.env` on the host and configure `APP_ENV=production`, the HTTPS `APP_URL`, a dedicated MySQL/MariaDB account and database, and SMTP settings. Process environment variables override `.env`. Keep PHP error display disabled. If HTTPS terminates at a proxy, production session cookies remain Secure; configure the host/proxy to enforce HTTPS.
 5. Run `php bin/console.php init` against the empty dedicated database. Alternatively import `database/schema.sql` once in phpMyAdmin. This is initial schema version 1; there is no existing-data migration.
-6. Run `php bin/console.php create-admin bates your-work-email "Andrew Bates"`. The command creates only the first administrator and displays a temporary password once. Sign in and change it.
+6. Run `php bin/console.php create-admin your-work-email "Andrew Bates"`. The command creates only the first administrator and displays a temporary password once. Sign in and change it.
 7. Verify SMTP settings, then in **People**, create Jeremy Miller as Analyst, and Andrew Peters and Jacob Mayich as Design, using verified work email addresses. Each new staff account receives a welcome email with a password setup link. In **Notifications**, enter the four stakeholder addresses. These notification addresses are maintained separately from account email addresses.
 8. Run `php bin/console.php check`. Configure a cron job every five minutes to run `/absolute/path/to/php /absolute/path/to/portal/bin/console.php mail:work` with the repository as the working directory. Milestone requests attempt immediate delivery; cron handles pending messages left after an interrupted request. Failed messages remain visible for manual retry.
 9. Run `php bin/console.php mail:test controlled-test-recipient@example.org` using an address you control. Confirm inbox arrival and the configured sender. This command intentionally sends one test message when SMTP is configured.
@@ -84,7 +85,7 @@ Back up the MySQL/MariaDB database on the hosting provider's schedule and protec
 
 ## Updating an existing deployment
 
-The welcome-email update uses the existing database tables; no migration or database initialization is needed. Commit and push the updated source, use **Update from Remote** in cPanel Git Version Control, and run `composer install --no-dev --prefer-dist --optimize-autoloader` in the application folder. Run `php bin/console.php check` to confirm the existing configuration. Keep the server's `.env` and data in place; do not run `init` on the live database.
+The email-sign-in and welcome-email updates use the existing database tables; no migration or database initialization is needed. Commit and push the updated source, use **Update from Remote** in cPanel Git Version Control, and run `composer install --no-dev --prefer-dist --optimize-autoloader` in the application folder. Run `php bin/console.php check` to confirm the existing configuration. Keep the server's `.env` and data in place; do not run `init` on the live database.
 
 The update does not email existing users automatically. Use **Send welcome email** for an existing active account awaiting a password change. Test the welcome message with an account whose mailbox you control, complete its password setup, and verify the link cannot be reused before inviting other staff.
 

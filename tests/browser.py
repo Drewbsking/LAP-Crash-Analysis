@@ -37,12 +37,12 @@ def check(condition, description):
     checks.append(description)
     print("PASS", description, flush=True)
 
-def login(browser, username, password="Demo-Only-2026!", **options):
+def login(browser, identity, password="Demo-Only-2026!", **options):
     context = browser.new_context(**options)
     page = context.new_page()
     page.on("pageerror", lambda err: errors.append(str(err)))
     page.goto(BASE + "/login.php")
-    page.get_by_label("Username", exact=True).fill(username)
+    page.get_by_label("Email address", exact=True).fill(identity)
     page.get_by_label("Password", exact=True).fill(password)
     page.get_by_role("button", name="Sign in", exact=False).click()
     page.wait_for_url("**/dashboard.php")
@@ -76,7 +76,7 @@ try:
         check(anon.evaluate("document.activeElement.textContent.trim()") == "Skip to content", "Keyboard users get a skip link first")
         anon.close()
 
-        design_context, design = login(browser, "peters", viewport={"width":1440,"height":1000})
+        design_context, design = login(browser, "peters@example.test", viewport={"width":1440,"height":1000})
         design.screenshot(path=str(OUT / "dashboard-desktop.png"), full_page=True)
         no_overflow(design, "Desktop dashboard")
         check(design.get_by_text("Overdue", exact=True).count() > 0, "Overdue review is visible on dashboard")
@@ -112,7 +112,7 @@ try:
         denied=design.request.post(project_url,form={"action":"folder","folder_path":r"G:\A TOC","version":"1","csrf":csrf(design)})
         check("permission" in denied.text(),"Forged reviewer action rejected server-side")
 
-        analyst_context,analyst=login(browser,"jeremy",viewport={"width":1440,"height":1000},permissions=["clipboard-read","clipboard-write"])
+        analyst_context,analyst=login(browser,"jeremy@example.test",viewport={"width":1440,"height":1000},permissions=["clipboard-read","clipboard-write"])
         analyst.goto(project_url)
         analyst.get_by_label("Folder location",exact=True).fill(r"G:\A TOC\Browser review")
         analyst.get_by_role("button",name="Save folder & start",exact=True).click()
@@ -137,7 +137,7 @@ try:
         check(response.status==403,"Completed project edit URL is forbidden")
         admin.goto(BASE+"/admin/users.php")
         admin.get_by_label("Full name",exact=True).last.fill("Browser Test Designer")
-        admin.get_by_label("Username",exact=True).last.fill("browseruser")
+        check(admin.get_by_label("Username",exact=True).count()==0,"Account creation and editing need no separate username")
         admin.get_by_label("Email address",exact=True).fill("browseruser@example.test")
         admin.get_by_role("button",name="Create account",exact=True).click()
         expect(admin.get_by_text("Account created. A welcome email with a password setup link has been sent.",exact=True)).to_be_visible()
@@ -146,7 +146,7 @@ try:
             with sqlite3.connect(DB) as connection:
                 return connection.execute("SELECT text_body, html_body, state FROM mail_outbox WHERE recipient=? ORDER BY id DESC LIMIT 1",("browseruser@example.test",)).fetchone()
         first_welcome=welcome_message()
-        check(first_welcome[2]=="sent" and "required project information up front" in first_welcome[0] and "Username: browseruser" in first_welcome[0],"Welcome email is delivered through the local transport with username and portal purpose")
+        check(first_welcome[2]=="sent" and "required project information up front" in first_welcome[0] and "Sign-in email: browseruser@example.test" in first_welcome[0],"Welcome email is delivered through the local transport with sign-in email and portal purpose")
         first_link=re.search(r"Set your password: (\S+)",first_welcome[0]).group(1)
         person=admin.locator(".admin-person").filter(has_text="Browser Test Designer")
         person.get_by_text("Edit account",exact=True).click()
@@ -183,7 +183,7 @@ try:
             no_overflow(newpage,f"{width}px sign-in purpose text")
             if width in [390,1440]:
                 newpage.screenshot(path=str(OUT/f"login-{width}.png"),full_page=True)
-        invited_context,invited=login(browser,"browseruser",password="Browser-Private-Password!")
+        invited_context,invited=login(browser,"BROWSERUSER@example.test",password="Browser-Private-Password!")
         check(invited.url.endswith("/dashboard.php"),"Invited user signs in normally after password setup")
         invited_context.close()
         newpage.goto(setup_link)
@@ -198,7 +198,7 @@ try:
         person.get_by_role("button",name="Generate temporary password",exact=True).click()
         temporary=admin.locator(".secret-display").inner_text()
         newpage.goto(BASE+"/login.php")
-        newpage.get_by_label("Username",exact=True).fill("browseruser")
+        newpage.get_by_label("Email address",exact=True).fill("browseruser@example.test")
         newpage.get_by_label("Password",exact=True).fill(temporary)
         newpage.get_by_role("button",name="Sign in",exact=False).click()
         newpage.wait_for_url("**/change-password.php")
@@ -225,6 +225,16 @@ try:
         for path in ["/admin/users.php","/admin/settings.php"]:
             admin.goto(BASE+path)
             no_overflow(admin,"Mobile " + path)
+
+        admin.goto(BASE+"/admin/users.php")
+        person=admin.locator(".admin-person").filter(has_text="Browser Test Designer")
+        person.get_by_text("Edit account",exact=True).click()
+        person.get_by_label("Email",exact=True).fill("updated-browser@example.test")
+        person.get_by_role("button",name="Save account",exact=True).click()
+        expect(admin.get_by_text("Account updated.",exact=True)).to_be_visible()
+        changed_context,changed=login(browser,"updated-browser@example.test",password="Browser-Private-Password!")
+        check(changed.url.endswith("/dashboard.php"),"Editing an account email changes its sign-in address while preserving its password")
+        changed_context.close()
 
         # New browser session verifies data was persisted, not held in client state.
         persisted_context,persisted=login(browser,"peters")

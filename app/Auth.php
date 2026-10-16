@@ -54,10 +54,17 @@ final class Auth
             return true;
         });
     }
-    public static function login(string $username, string $password, string $ip): bool
+    public static function login(string $identity, string $password, string $ip): bool
     {
-        if (!self::rateLimit('login-account', trim($username), 15) || !self::rateLimit('login-ip', $ip, 60)) return false;
-        $user = DB::one('SELECT * FROM users WHERE username=?', [strtolower(trim($username))]);
+        $identity = strtolower(trim($identity));
+        if (!self::rateLimit('login-ip', $ip, 60)) return false;
+        // Email is the sign-in name. Keep existing, non-email usernames working.
+        $user = str_contains($identity, '@')
+            ? DB::one('SELECT * FROM users WHERE email=?', [$identity])
+            : (preg_match('/^[a-z0-9][a-z0-9._-]{2,99}$/', $identity)
+                ? DB::one('SELECT * FROM users WHERE username=?', [$identity]) : null);
+        // Both ways of signing in share the same account attempt limit.
+        if (!self::rateLimit('login-account', $user['email'] ?? $identity, 15)) return false;
         if (!$user || !$user['is_active'] || !password_verify($password, $user['password_hash'])) return false;
         if (session_status() === PHP_SESSION_ACTIVE) session_regenerate_id(true);
         $_SESSION = ['user_id' => (int)$user['id'], 'session_version' => (int)$user['session_version'], 'last_activity' => time(), 'csrf' => bin2hex(random_bytes(32))];
@@ -83,17 +90,27 @@ final class Auth
         if ($actorId !== null) self::actor($actorId, ['admin']);
         elseif (PHP_SAPI !== 'cli' || DB::one('SELECT id FROM users LIMIT 1')) throw new ValidationException(['Use an administrator account to create users.']);
         $values = self::validateUser($input);
+        // Retain the old column without requiring a live database migration.
+        // New accounts get an internal key that cannot be used as a legacy login.
+        $legacyUsername = strtolower(trim(is_string($input['username'] ?? null) ? $input['username'] : ''));
+        if ($legacyUsername !== '' && !preg_match('/^[a-z0-9][a-z0-9._-]{2,99}$/', $legacyUsername)) {
+            throw new ValidationException(['The legacy username is invalid. Use an email address to create the account.']);
+        }
+        $accountKey = $legacyUsername !== '' ? $legacyUsername : 'account:' . bin2hex(random_bytes(16));
         try {
-            DB::query('INSERT INTO users(username, full_name, email, role, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [...array_values($values), self::hashPassword($temporaryPassword), \now(), \now()]);
+            DB::query('INSERT INTO users(username, full_name, email, role, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [$accountKey, ...array_values($values), self::hashPassword($temporaryPassword), \now(), \now()]);
             return (int)DB::conn()->lastInsertId();
         } catch (\PDOException $e) {
-            if (str_starts_with((string)$e->getCode(), '23')) throw new ValidationException(['That username or email address is already in use.']);
+            if (str_starts_with((string)$e->getCode(), '23')) {
+                throw new ValidationException([$legacyUsername === '' ? 'That email address is already in use.' : 'That email address or legacy username is already in use.']);
+            }
             throw $e;
         }
     }
     /** Create the account, setup token, and welcome notification together. Send after commit. */
     public static function inviteUser(array $input, int $actorId): array
     {
+        unset($input['username']);
         return DB::transaction(function () use ($input, $actorId): array {
             $userId = self::createUser($input, self::temporaryPassword(), $actorId);
             $user = DB::one('SELECT * FROM users WHERE id=?', [$userId]);
@@ -129,13 +146,13 @@ final class Auth
             . '<p>Your staff account is ready. Use the link below to choose your password.</p>'
             . '<h3>What the site is used for</h3><p>' . \h($purpose) . '</p>'
             . '<p>Design staff submit project details and deadlines. Traffic Safety staff record analysis progress. Everyone can see whether a request has been submitted and its current status.</p>'
-            . '<p><strong>Username:</strong> ' . \h($user['username']) . '<br><strong>Role:</strong> ' . \h($role) . '</p>'
+            . '<p><strong>Sign-in email:</strong> ' . \h($user['email']) . '<br><strong>Role:</strong> ' . \h($role) . '</p>'
             . '<p><a href="' . \h($link) . '">Set your password</a></p>'
             . '<p>This link expires in 24 hours and can be used once. If a newer link is sent, use the newest one.</p>'
             . '<p>After setting your password, <a href="' . \h($login) . '">sign in to the portal</a>. If the link expires, choose Forgot your password? on the sign-in page to request a fresh link, or contact Andrew Bates.</p>';
         $text = 'Hello ' . $user['full_name'] . ",\n\nWelcome to RCOC Crash Analysis. Your staff account is ready.\n\n"
             . $purpose . "\n\nDesign staff submit project details and deadlines. Traffic Safety staff record analysis progress. Everyone can see whether a request has been submitted and its current status.\n\n"
-            . 'Username: ' . $user['username'] . "\nRole: $role\n\nSet your password: $link\n"
+            . 'Sign-in email: ' . $user['email'] . "\nRole: $role\n\nSet your password: $link\n"
             . "This link expires in 24 hours and can be used once. If a newer link is sent, use the newest one.\n\n"
             . "After setting your password, sign in: $login\nIf the link expires, use Forgot your password? on the sign-in page or contact Andrew Bates.\n";
         Mail::queue(null, $user['email'], $user['full_name'], 'Welcome to RCOC Crash Analysis - set your password', $html, $text);
@@ -144,11 +161,9 @@ final class Auth
     private static function validateUser(array $input): array
     {
         $values = [];
-        foreach (['username', 'full_name', 'email', 'role'] as $key) $values[$key] = trim(is_string($input[$key] ?? null) ? $input[$key] : '');
-        $values['username'] = strtolower($values['username']);
+        foreach (['full_name', 'email', 'role'] as $key) $values[$key] = trim(is_string($input[$key] ?? null) ? $input[$key] : '');
         $values['email'] = strtolower($values['email']);
         $errors = [];
-        if (!preg_match('/^[a-z0-9][a-z0-9._-]{2,99}$/', $values['username'])) $errors[] = 'Username must be 3–100 letters, numbers, periods, underscores, or hyphens.';
         if (!$values['full_name'] || mb_strlen($values['full_name']) > 191) $errors[] = 'Enter a full name of up to 191 characters.';
         if (!filter_var($values['email'], FILTER_VALIDATE_EMAIL) || strlen($values['email']) > 191) $errors[] = 'Enter a valid email address.';
         if (!isset(self::ROLES[$values['role']])) $errors[] = 'Select a valid role.';
@@ -175,12 +190,12 @@ final class Auth
             try {
                 $emailChanged = $target['email'] !== $values['email'];
                 $revoke = ($target['role'] !== $values['role'] || (int)$target['is_active'] !== $active || $emailChanged) ? 1 : 0;
-                DB::query('UPDATE users SET username=?, full_name=?, email=?, role=?, is_active=?, session_version=session_version+?, updated_at=? WHERE id=?', [...array_values($values), $active, $revoke, \now(), $userId]);
+                DB::query('UPDATE users SET full_name=?, email=?, role=?, is_active=?, session_version=session_version+?, updated_at=? WHERE id=?', [...array_values($values), $active, $revoke, \now(), $userId]);
                 if ($emailChanged || !$active) {
                     DB::query('UPDATE password_resets SET used_at=? WHERE user_id=? AND used_at IS NULL', [\now(), $userId]);
                 }
             } catch (\PDOException $e) {
-                if (str_starts_with((string)$e->getCode(), '23')) throw new ValidationException(['That username or email address is already in use.']);
+                if (str_starts_with((string)$e->getCode(), '23')) throw new ValidationException(['That email address is already in use.']);
                 throw $e;
             }
         });

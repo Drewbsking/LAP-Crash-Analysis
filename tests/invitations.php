@@ -58,7 +58,7 @@ ok($mail['recipient'] === 'invited@example.test' && $mail['event_id'] === null &
 ok($reset && $reset['token_hash'] !== $token && (int)$reset['user_id'] === $id, 'Setup token is random and hashed in the token table');
 $lifetime = strtotime($reset['expires_at']) - time();
 ok($lifetime >= 86395 && $lifetime <= 86400, 'Welcome link expires in 24 hours');
-ok(str_contains($mail['text_body'], 'Username: invited') && str_contains($mail['text_body'], 'Role: Design'), 'Welcome includes the username and assigned role');
+ok(str_contains($mail['text_body'], 'Sign-in email: invited@example.test') && str_contains($mail['text_body'], 'Role: Design'), 'Welcome includes the sign-in email and assigned role');
 ok(str_contains($mail['text_body'], 'required project information up front') && str_contains($mail['text_body'], 'records that the request was made') && str_contains($mail['text_body'], 'Ready for Review'), 'Welcome explains complete intake, recorded requests, and progress tracking');
 ok(str_contains($mail['html_body'], 'New &lt;Staff&gt; &amp; Colleague') && !str_contains($mail['html_body'], '<Staff>'), 'Welcome escapes user-provided HTML');
 ok(str_contains($mail['text_body'], 'https://portal.example.test/reset-password.php?token=') && str_contains($mail['text_body'], 'Forgot your password?'), 'Welcome uses the configured HTTPS URL and explains expired-link recovery');
@@ -76,7 +76,7 @@ ok(Mail::retry($admin, $mailId) && count($delivered) === 1, 'Administrator can r
 ok(!Mail::retry($admin, $mailId) && count($delivered) === 1 && countRows('users') === 3, 'Retry neither resends accepted mail nor creates another account');
 rejects(fn() => Auth::resetWithToken($token, 'short'), 'Setup enforces the password policy');
 Auth::resetWithToken($token, $password);
-ok(!userRow($id)['must_reset'] && Auth::login('invited', $password, 'invitation-login'), 'Password setup enables normal sign-in without another forced change');
+ok(!userRow($id)['must_reset'] && Auth::login('INVITED@example.test', $password, 'invitation-login'), 'Password setup enables normal sign-in without another forced change');
 rejects(fn() => Auth::resetWithToken($token, 'Another-Private-Password!'), 'Welcome link cannot be used twice');
 rejects(fn() => Auth::resendWelcome($admin, $id), 'Established users cannot receive onboarding links');
 
@@ -143,4 +143,40 @@ foreach ($jobs as [$process, $pipes]) {
 }
 sort($outputs);
 ok($outputs === ['accepted', 'rejected'], 'Concurrent setup submissions consume the link exactly once');
+
+// Email is the account identity, including on databases created before this update.
+ok(Auth::login('  ADMIN@EXAMPLE.TEST  ', $password, 'email-existing'), 'Existing account accepts its saved email regardless of case and outer whitespace');
+ok(Auth::login('admin', $password, 'username-existing'), 'Existing username continues to work');
+Auth::updateUser($admin, $designer, ['full_name' => 'Updated Designer', 'email' => 'DESIGNER@EXAMPLE.TEST', 'role' => 'design', 'is_active' => 1]);
+ok(Auth::login('designer', $password, 'username-after-edit'), 'Editing an existing account without a username preserves its legacy sign-in');
+ok(!Auth::login('invited', $password, 'ignored-invite-username') && !Auth::login(userRow($id)['username'], $password, 'internal-key-login'), 'New invitations ignore submitted usernames and internal account keys cannot sign in');
+
+$emailOnly = ['full_name' => 'Email Only Staff', 'email' => '  EMAIL.ONLY+LAP@EXAMPLE.TEST  ', 'role' => 'design'];
+$emailAccount = Auth::inviteUser($emailOnly, $admin);
+$emailId = $emailAccount['user_id'];
+ok(message($emailAccount['mail_id'])['recipient'] === 'email.only+lap@example.test', 'Creation needs no username and normalizes the email before sending');
+Auth::resetWithToken(tokenFrom($emailAccount['mail_id']), $password);
+ok(Auth::login('email.only+lap@example.test', $password, 'email-only-login'), 'Email with plus addressing works after password setup');
+$emailSession = $_SESSION;
+rejects(fn() => Auth::inviteUser(array_replace($emailOnly, ['email' => 'EMAIL.ONLY+LAP@example.test']), $admin), 'Duplicate email is rejected regardless of case');
+rejects(fn() => Auth::inviteUser(array_replace($emailOnly, ['email' => 'invalid-email']), $admin), 'Account creation rejects an invalid email address');
+rejects(fn() => Auth::updateUser($admin, $emailId, array_replace($emailOnly, ['email' => 'ADMIN@example.test', 'is_active' => 1])), 'Editing cannot reuse another account email');
+ok(userRow($emailId)['email'] === 'email.only+lap@example.test', 'Rejected email edit preserves the existing sign-in');
+Auth::updateUser($admin, $emailId, array_replace($emailOnly, ['email' => 'changed@example.test', 'is_active' => 1]));
+$_SESSION = $emailSession;
+ok(Auth::user() === null && !Auth::login('email.only+lap@example.test', $password, 'old-email'), 'Changing email revokes existing sessions and the old email sign-in');
+ok(Auth::login('CHANGED@example.test', $password, 'new-email'), 'New email uses the existing password');
+Auth::updateUser($admin, $emailId, array_replace($emailOnly, ['email' => 'changed@example.test', 'is_active' => 0]));
+ok(!Auth::login('changed@example.test', $password, 'inactive-email'), 'Deactivated accounts cannot sign in by email');
+
+$longEmail = str_repeat('a', 60) . '@' . str_repeat('b', 50) . '.example.test';
+$longAccount = Auth::inviteUser(array_replace($emailOnly, ['email' => $longEmail]), $admin);
+Auth::resetWithToken(tokenFrom($longAccount['mail_id']), $password);
+ok(strlen($longEmail) > 100 && Auth::login($longEmail, $password, 'long-email'), 'Email addresses longer than the legacy username column work without a schema change');
+
+Auth::createUser(person('limited'), $password, $admin);
+for ($attempt = 0; $attempt < 15; $attempt++) {
+    Auth::login($attempt % 2 ? 'limited' : 'limited@example.test', 'wrong-password', 'shared-limit');
+}
+ok(!Auth::login('LIMITED@example.test', $password, 'shared-limit') && !Auth::login('limited', $password, 'shared-limit'), 'Email and legacy username share the same failed-attempt limit');
 echo "\n$checks invitation checks passed on " . DB::conn()->getAttribute(PDO::ATTR_DRIVER_NAME) . ".\n";
